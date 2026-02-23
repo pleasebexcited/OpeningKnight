@@ -1,0 +1,27 @@
+# Unreal Engine
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# Unreal generated project files
+.vs/
+.vscode/
+
+# Rider / JetBrains
+.idea/
+
+# OS / editor noise
+Thumbs.db
+Desktop.ini
+*.log
+
+# Build artifacts
+*.tmp
+*.suo
+*.opensdf
+*.sdf
+
+# (Optional) If you don't want local build config tracked
+**/Saved/UnrealBuildTool/BuildConfiguration.xml
+
