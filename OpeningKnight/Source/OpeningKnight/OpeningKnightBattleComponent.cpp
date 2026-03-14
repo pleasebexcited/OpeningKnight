@@ -20,6 +20,8 @@ void UOpeningKnightBattleComponent::BeginPlay()
 
 void UOpeningKnightBattleComponent::StartNewRun()
 {
+	BlockMinigameRound = EBlockMinigameRound::None;
+	bBlockCounterSuccessInProgress = false;
 	// Ensure any pending auto-confirm doesn't fire into a new run.
 	if (UWorld* World = GetWorld())
 	{
@@ -28,10 +30,10 @@ void UOpeningKnightBattleComponent::StartNewRun()
 		World->GetTimerManager().ClearTimer(EnemyReturnHandle);
 		World->GetTimerManager().ClearTimer(EnemyTurnHandle);
 		World->GetTimerManager().ClearTimer(AutoAdvanceVictoryHandle);
+		World->GetTimerManager().ClearTimer(BlockCounterAttackHandle);
 	}
 
 	PlayerHP = PlayerMaxHP;
-	PlayerShield = BaseShield;
 
 	Level = 1;
 	SpawnEnemyForLevel();
@@ -50,6 +52,7 @@ void UOpeningKnightBattleComponent::SetPhase(EOKTurnPhase NewPhase)
 
 void UOpeningKnightBattleComponent::ResetHand()
 {
+	bBlockCounterSuccessInProgress = false;
 	// Cancel any pending auto-confirm for the previous hand.
 	if (UWorld* World = GetWorld())
 	{
@@ -58,6 +61,7 @@ void UOpeningKnightBattleComponent::ResetHand()
 		World->GetTimerManager().ClearTimer(EnemyReturnHandle);
 		World->GetTimerManager().ClearTimer(EnemyTurnHandle);
 		World->GetTimerManager().ClearTimer(AutoAdvanceVictoryHandle);
+		World->GetTimerManager().ClearTimer(BlockCounterAttackHandle);
 	}
 
 	RerollsLeft = MaxRerollsPerHand;
@@ -81,7 +85,6 @@ void UOpeningKnightBattleComponent::SpawnEnemyForLevel()
 	const float Scale = FMath::Pow(EnemyHPScalePerLevel, float(Level - 1));
 	EnemyMaxHP = FMath::FloorToInt(float(BaseEnemyHP) * Scale);
 	EnemyHP = EnemyMaxHP;
-	EnemyShield = BaseShield;
 }
 
 void UOpeningKnightBattleComponent::BroadcastStats()
@@ -89,10 +92,10 @@ void UOpeningKnightBattleComponent::BroadcastStats()
 	FOKStatsUI Stats;
 	Stats.PlayerHP = PlayerHP;
 	Stats.PlayerMaxHP = PlayerMaxHP;
-	Stats.PlayerShield = PlayerShield;
 	Stats.EnemyHP = EnemyHP;
 	Stats.EnemyMaxHP = EnemyMaxHP;
-	Stats.EnemyShield = EnemyShield;
+	Stats.PlayerShield = 0;  // deprecated, kept for Blueprint compatibility
+	Stats.EnemyShield = 0;   // deprecated, kept for Blueprint compatibility
 	OnStatsChanged.Broadcast(Stats);
 }
 
@@ -327,6 +330,8 @@ void UOpeningKnightBattleComponent::ConfirmPlayerHit()
 
 	ApplyDamageToEnemy(PendingPlayerDamage);
 	UE_LOG(LogTemp, Log, TEXT("[HitCloud] ConfirmPlayerHit applied damage %d to enemy, EnemyHP now=%d"), PendingPlayerDamage, EnemyHP);
+	const bool bWasBlockCounter = bBlockCounterSuccessInProgress;
+	bBlockCounterSuccessInProgress = false;
 
 	if (EnemyHP <= 0)
 	{
@@ -353,6 +358,14 @@ void UOpeningKnightBattleComponent::ConfirmPlayerHit()
 		return;
 	}
 
+	// Block+counter: knight's counter ends the exchange; player's turn, enemy does not attack again
+	if (bWasBlockCounter)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[HitCloud] ConfirmPlayerHit -> ResetHand (block counter, end of exchange)"));
+		ResetHand();
+		return;
+	}
+
 	UE_LOG(LogTemp, Log, TEXT("[HitCloud] ConfirmPlayerHit -> StartEnemyTurn"));
 	StartEnemyTurn();
 }
@@ -373,10 +386,9 @@ void UOpeningKnightBattleComponent::AdvanceAfterVictory()
 		World->GetTimerManager().ClearTimer(EnemyTurnHandle);
 	}
 
-	// basic loop for now: heal + restore shield + next enemy
+	// basic loop for now: heal + next enemy
 	const int32 Heal = FMath::FloorToInt(float(PlayerMaxHP) * PostVictoryHealPercent);
 	PlayerHP = FMath::Clamp(PlayerHP + Heal, 0, PlayerMaxHP);
-	PlayerShield = BaseShield;
 
 	Level++;
 	SpawnEnemyForLevel();
@@ -506,6 +518,21 @@ void UOpeningKnightBattleComponent::ConfirmEnemyHit()
 		UE_LOG(LogTemp, Warning, TEXT("[HitCloud] ConfirmEnemyHit IGNORED: wrong phase=%d (need 3). Call only at the enemy attack impact moment."), (int32)Phase);
 		return;
 	}
+	if (BlockMinigameRound != EBlockMinigameRound::None)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[HitCloud] ConfirmEnemyHit IGNORED: block minigame still active."));
+		return;
+	}
+	// Block+counter succeeded - we blocked the attack, knight will counter. Ignore enemy impact.
+	if (bBlockCounterSuccessInProgress)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[HitCloud] ConfirmEnemyHit IGNORED: block+counter succeeded, enemy hit blocked."));
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(AutoConfirmEnemyHandle);
+		}
+		return;
+	}
 
 	// Cancel the auto timer so it doesn't fire later and log IGNORED.
 	if (UWorld* World = GetWorld())
@@ -560,40 +587,177 @@ void UOpeningKnightBattleComponent::FinishEnemyTurn()
 
 void UOpeningKnightBattleComponent::ApplyDamageToEnemy(int32 Damage)
 {
-	int32 Remaining = Damage;
-
-	if (EnemyShield > 0)
-	{
-		const int32 Absorb = FMath::Min(EnemyShield, Remaining);
-		EnemyShield -= Absorb;
-		Remaining -= Absorb;
-	}
-
-	if (Remaining > 0)
-	{
-		EnemyHP = FMath::Max(0, EnemyHP - Remaining);
-	}
-
+	EnemyHP = FMath::Max(0, EnemyHP - Damage);
 	BroadcastStats();
 }
 
 void UOpeningKnightBattleComponent::ApplyDamageToPlayer(int32 Damage)
 {
-	int32 Remaining = Damage;
-
-	if (PlayerShield > 0)
-	{
-		const int32 Absorb = FMath::Min(PlayerShield, Remaining);
-		PlayerShield -= Absorb;
-		Remaining -= Absorb;
-	}
-
-	if (Remaining > 0)
-	{
-		PlayerHP = FMath::Max(0, PlayerHP - Remaining);
-	}
-
+	PlayerHP = FMath::Max(0, PlayerHP - Damage);
 	BroadcastStats();
+}
+
+// ===================== Block/Counter =====================
+
+TArray<int32> UOpeningKnightBattleComponent::RollBlockMinigameDice() const
+{
+	// Roll 3 distinct values (1-6) so "click in ascending order" is unambiguous
+	TArray<int32> Pool = {1, 2, 3, 4, 5, 6};
+	for (int32 i = 5; i >= 1; i--)
+	{
+		int32 j = FMath::RandRange(0, i);
+		Pool.Swap(i, j);
+	}
+	TArray<int32> Out;
+	Out.Add(Pool[0]);
+	Out.Add(Pool[1]);
+	Out.Add(Pool[2]);
+	return Out;
+}
+
+void UOpeningKnightBattleComponent::TryBlockOrCounter()
+{
+	if (Phase != EOKTurnPhase::AwaitingEnemyHitConfirm)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Block] TryBlockOrCounter IGNORED: wrong phase=%d"), (int32)Phase);
+		return;
+	}
+	if (BlockMinigameRound != EBlockMinigameRound::None)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Block] TryBlockOrCounter IGNORED: minigame already active"));
+		return;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(AutoConfirmEnemyHandle);
+	}
+
+	BlockMinigameRound = EBlockMinigameRound::Block;
+	OnBlockMinigameFreezeEnemy.Broadcast();
+	StartBlockMinigameBlockRound();
+}
+
+void UOpeningKnightBattleComponent::StartBlockMinigameBlockRound()
+{
+	FOKBlockMinigameDice BlockDice;
+	BlockDice.Values = RollBlockMinigameDice();
+	OnBlockMinigameBlockRoundStarted.Broadcast(BlockDice);
+	UE_LOG(LogTemp, Log, TEXT("[Block] Block round started, dice=%d %d %d"), BlockDice.Values[0], BlockDice.Values[1], BlockDice.Values[2]);
+}
+
+void UOpeningKnightBattleComponent::StartBlockMinigameCounterRound()
+{
+	FOKBlockMinigameDice BlockDice;
+	BlockDice.Values = RollBlockMinigameDice();
+	OnBlockMinigameCounterRoundStarted.Broadcast(BlockDice);
+	UE_LOG(LogTemp, Log, TEXT("[Block] Counter round started, dice=%d %d %d"), BlockDice.Values[0], BlockDice.Values[1], BlockDice.Values[2]);
+}
+
+void UOpeningKnightBattleComponent::CallReturnToPositionOnEnemies()
+{
+	if (!GetWorld()) return;
+	TArray<AActor*> Enemies;
+	UGameplayStatics::GetAllActorsWithTag(GetWorld(), FName(TEXT("Enemy")), Enemies);
+	if (Enemies.Num() == 0)
+	{
+		UClass* EnemyClass = LoadObject<UClass>(nullptr, TEXT("/Game/Images/Enemies/BP_Enemy.BP_Enemy_C"));
+		if (EnemyClass)
+		{
+			UGameplayStatics::GetAllActorsOfClass(GetWorld(), EnemyClass, Enemies);
+		}
+	}
+	if (Enemies.Num() == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Block] CallReturnToPositionOnEnemies: no enemies found (tag=Enemy or class BP_Enemy). Enemy will stay frozen."));
+		return;
+	}
+	for (AActor* Enemy : Enemies)
+	{
+		if (!Enemy) continue;
+		UFunction* ReturnToPositionFunc = Enemy->FindFunction(FName(TEXT("ReturnToPosition")));
+		if (ReturnToPositionFunc)
+		{
+			Enemy->ProcessEvent(ReturnToPositionFunc, nullptr);
+			UE_LOG(LogTemp, Log, TEXT("[Block] Called ReturnToPosition on %s"), *Enemy->GetName());
+			return;
+		}
+	}
+	UE_LOG(LogTemp, Warning, TEXT("[Block] BP_Enemy has no ReturnToPosition function. Add a Blueprint Callable function named ReturnToPosition that: Stop TL_AttackDash, Set Actor Location = AttackHomeLocation, Set bIsAttacking/bAttackReturning = false. See BLOCK_COUNTER_SETUP.md."));
+}
+
+void UOpeningKnightBattleComponent::DoBlockCounterAttack()
+{
+	BlockCounterAttackHandle.Invalidate();
+	SetPhase(EOKTurnPhase::AwaitingPlayerHitConfirm);
+	OnPlayerAttackStarted.Broadcast(PendingPlayerDamage, PendingPlayerDebugText);
+	if (AutoConfirmPlayerHitDelaySeconds > 0.0f)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(AutoConfirmPlayerHandle);
+			World->GetTimerManager().SetTimer(AutoConfirmPlayerHandle, this, &UOpeningKnightBattleComponent::ConfirmPlayerHit, AutoConfirmPlayerHitDelaySeconds, false);
+		}
+	}
+}
+
+void UOpeningKnightBattleComponent::NotifyBlockMinigameRoundResult(bool bSuccess)
+{
+	if (BlockMinigameRound == EBlockMinigameRound::None)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Block] NotifyBlockMinigameRoundResult IGNORED: no active round"));
+		return;
+	}
+
+	if (BlockMinigameRound == EBlockMinigameRound::Block)
+	{
+		if (!bSuccess)
+		{
+			BlockMinigameRound = EBlockMinigameRound::None;
+			OnBlockMinigameFailed.Broadcast();
+			OnBlockMinigameUnfreezeEnemy.Broadcast();
+			UE_LOG(LogTemp, Log, TEXT("[Block] Block failed - enemy continues"));
+			if (UWorld* World = GetWorld())
+			{
+				const float SafetyFallbackSeconds = 2.0f;
+				const float DelayToUse = (AutoConfirmEnemyHitDelaySeconds > 0.0f) ? AutoConfirmEnemyHitDelaySeconds : SafetyFallbackSeconds;
+				World->GetTimerManager().SetTimer(AutoConfirmEnemyHandle, this, &UOpeningKnightBattleComponent::ConfirmEnemyHit, DelayToUse, false);
+		}
+		return;
+	}
+	// Block succeeded: enemy returns to position (do NOT unfreeze/resume attack)
+	OnBlockMinigameEnemyReturnToPosition.Broadcast();
+	CallReturnToPositionOnEnemies();
+	BlockMinigameRound = EBlockMinigameRound::Counter;
+	StartBlockMinigameCounterRound();
+	return;
+	}
+
+	// Counter round: do NOT unfreeze - enemy was told to ReturnToPosition when block succeeded. Unfreeze would resume the attack.
+	BlockMinigameRound = EBlockMinigameRound::None;
+
+	if (bSuccess)
+	{
+		bBlockCounterSuccessInProgress = true;  // Ignore ConfirmEnemyHit - we blocked, knight will counter
+		OnBlockMinigameFullSuccess.Broadcast();
+		UE_LOG(LogTemp, Log, TEXT("[Block] Block+Counter success - knight counter-attacks after %.2fs (enemy returns first), damage=%d"), BlockCounterAttackDelaySeconds, PendingPlayerDamage);
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(BlockCounterAttackHandle);
+			World->GetTimerManager().SetTimer(BlockCounterAttackHandle, this, &UOpeningKnightBattleComponent::DoBlockCounterAttack, BlockCounterAttackDelaySeconds, false);
+		}
+		else
+		{
+			DoBlockCounterAttack();
+		}
+	}
+	else
+	{
+		OnBlockMinigameBlockOnly.Broadcast();
+		UE_LOG(LogTemp, Log, TEXT("[Block] Block ok, counter failed - knight returns, no damage"));
+		// We didn't go through ConfirmEnemyHit, so FinishEnemyTurn would no-op. Reset hand directly.
+		ResetHand();
+	}
 }
 
 // ===================== Scoring =====================

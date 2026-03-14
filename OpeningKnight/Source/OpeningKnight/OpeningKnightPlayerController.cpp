@@ -35,6 +35,16 @@ void AOpeningKnightPlayerController::BeginPlay()
 			CurtainsWidget->AddToViewport(CurtainsZOrder);
 		}
 	}
+
+	// Block minigame UI (optional)
+	if (BlockMinigameWidgetClass)
+	{
+		BlockMinigameWidget = CreateWidget<UUserWidget>(this, BlockMinigameWidgetClass);
+		if (BlockMinigameWidget)
+		{
+			BlockMinigameWidget->AddToViewport(BlockMinigameZOrder);
+		}
+	}
 }
 
 void AOpeningKnightPlayerController::HandleBattlePhaseChanged(EOKTurnPhase NewPhase)
@@ -133,6 +143,11 @@ void AOpeningKnightPlayerController::ConfirmEnemyHit()
 void AOpeningKnightPlayerController::FinishEnemyTurn()
 {
 	if (Battle) Battle->FinishEnemyTurn();
+}
+
+void AOpeningKnightPlayerController::BlockOrCounter()
+{
+	if (Battle) Battle->TryBlockOrCounter();
 }
 
 void AOpeningKnightPlayerController::TryCallCurtainsFunction(FName FuncName)

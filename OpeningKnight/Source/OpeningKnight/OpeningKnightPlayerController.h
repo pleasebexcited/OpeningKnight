@@ -44,6 +44,10 @@ protected:
 	UFUNCTION(BlueprintCallable, Category = "OpeningKnight|UI")
 	void FinishEnemyTurn();
 
+	/** Block/Counter: call from Btn_Block OnClicked in WBP_Play_BillHUD. Forwards to Battle->TryBlockOrCounter(). */
+	UFUNCTION(BlueprintCallable, Category = "OpeningKnight|UI")
+	void BlockOrCounter();
+
 	/**
 	 * Call this from your curtain widget when the "close" animation finishes (curtains meet in middle).
 	 * We'll advance the battle out of Victory and then request the curtains open again.
@@ -75,10 +79,6 @@ protected:
 	UFUNCTION(BlueprintCallable, Category = "OpeningKnight|Debug")
 	void LogHitCloudImpact(const FString& SourceName, FVector HitboxWorldLocation, FVector HitCloudActorLocation);
 
-	// Dice face lookup for UMG
-	UFUNCTION(BlueprintCallable, Category = "OpeningKnight|Dice")
-	UTexture2D* GetDiceTextureForValue(int32 Value, bool bIsWild) const;
-
 	// Dice tint helpers for UMG (selected dice should be more noticeable).
 	UFUNCTION(BlueprintPure, Category = "OpeningKnight|Dice")
 	FLinearColor GetSelectedDiceTint() const { return SelectedDiceTint; }
@@ -86,9 +86,20 @@ protected:
 	UFUNCTION(BlueprintPure, Category = "OpeningKnight|Dice")
 	FLinearColor GetUnselectedDiceTint() const { return UnselectedDiceTint; }
 
+public:
+	/** Battle component. Use Get Battle for Blueprint bindings (more reliable after hot reload). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "OpeningKnight")
 	UOpeningKnightBattleComponent* Battle = nullptr;
 
+	/** Prefer this over direct Battle access for Blueprint bindings (more reliable after hot reload). */
+	UFUNCTION(BlueprintPure, Category = "OpeningKnight", meta = (DisplayName = "Get Battle"))
+	UOpeningKnightBattleComponent* GetBattle() const { return Battle; }
+
+	/** Dice face texture for value 1-6; used by block minigame and main dice UI. */
+	UFUNCTION(BlueprintCallable, Category = "OpeningKnight|Dice")
+	UTexture2D* GetDiceTextureForValue(int32 Value, bool bIsWild) const;
+
+protected:
 	/** Assign `WBP_Curtains` (or similar) in BP_OpeningKnightPlayerController defaults. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "OpeningKnight|UI")
 	TSubclassOf<UUserWidget> CurtainsWidgetClass;
@@ -96,6 +107,13 @@ protected:
 	/** Higher draws on top of other UI. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "OpeningKnight|UI")
 	int32 CurtainsZOrder = 500;
+
+	/** Assign `WBP_BlockMinigame` in BP_OpeningKnightPlayerController. Block minigame overlay (dice, BLOCKED/COUNTERED/FAILED). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "OpeningKnight|UI")
+	TSubclassOf<UUserWidget> BlockMinigameWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "OpeningKnight|UI")
+	int32 BlockMinigameZOrder = 400;
 
 	// Assign these in the BP defaults of BP_OpeningKnightPlayerController after re-parenting
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "OpeningKnight|Dice Faces")
@@ -130,6 +148,9 @@ protected:
 private:
 	UPROPERTY(Transient)
 	UUserWidget* CurtainsWidget = nullptr;
+
+	UPROPERTY(Transient)
+	UUserWidget* BlockMinigameWidget = nullptr;
 
 	bool bCurtainsTransitionInProgress = false;
 
