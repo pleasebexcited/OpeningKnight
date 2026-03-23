@@ -4,9 +4,10 @@ DerivedDataCache/
 Intermediate/
 Saved/
 
-# Unreal generated project files
+# Unreal generated project files (regenerated per-machine from .uproject)
 .vs/
 .vscode/
+*.sln
 
 # Rider / JetBrains
 .idea/
